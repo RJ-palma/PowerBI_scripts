@@ -11,7 +11,10 @@ for ($i = 0; $i -lt $workspaces.Count; $i++) {
 }
 
 # Prompt user for workspace selection
-$workspaceSelection = Read-Host "Please enter the number of the workspace you want to check"
+$workspaceSelection = Read-Host "`nPlease enter the number of the workspace you want to check"
+
+# Convert input to integer
+$workspaceSelection = [int]$workspaceSelection
 
 # Validate user input
 if ($workspaceSelection -lt 1 -or $workspaceSelection -gt $workspaces.Count) {
@@ -25,28 +28,52 @@ $selectedWorkspace = $workspaces[$workspaceSelection - 1]
 # Get datasets in the selected workspace
 $datasets = Get-PowerBIDataset -WorkspaceId $selectedWorkspace.Id
 
+$ctr = 0
+
 if ($datasets.Count -eq 0) {
     Write-Host "No datasets found in workspace '$($selectedWorkspace.Name)'."
 } else {
-    # Check refresh history
+    Write-Host "`nChecking refresh status for datasets in workspace '$($selectedWorkspace.Name)':`n"
     foreach ($dataset in $datasets) {
-        # Get the refreshable status (type and scheduled status) 
+        # Get the refreshable status for each dataset
         $refreshableStatus = Get-PowerBIDataset -DatasetId $dataset.Id -WorkspaceId $selectedWorkspace.Id
-
-        # Write the dataset status
-        Write-Host "Dataset '$($dataset.Name)' in workspace '$($selectedWorkspace.Name)', Last Refresh: $($refreshableStatus.LastRefresh)," +
-                   " Refreshable: $($refreshableStatus.IsRefreshable)"
         
-        # Note: You might retrieve activities from Activity Logs instead if available
-        # Check Refresh Activity Events for Dataset Refresh Failures
-        $refreshActivities = Get-PowerBIActivityEvent -ResourceType Dataset -StartDate (Get-Date).AddDays(-7) -EndDate (Get-Date)
+        # Only check if the dataset is a semantic model (this assumes models are marked refreshable)
+        $isRefreshable = $refreshableStatus.IsRefreshable
 
-        foreach ($event in $refreshActivities) {
-            if ($event.DatasetId -eq $dataset.Id -and $event.Operation -eq "Refresh" -and $event.Status -eq "Failed") {
-                # Log or Notify about the failure
-                Write-Host "Dataset '$($dataset.Name)' in workspace '$($selectedWorkspace.Name)' has failed refresh on $($event.EventTime)"
-            }
+        if (-not $isRefreshable) {
+            # Only print if the dataset is unrefreshable
+            Write-Host "`nDataset '$($dataset.Name)' is " -NoNewline
+            Write-Host "**unrefreshable**.`n" -ForegroundColor Yellow
+
+            #uncomment to show error details (does not work)
+            # # Check refresh history to find out the reason for failure
+            # $refreshHistory = Get-PowerBIRefreshHistory -DatasetId $dataset.Id -WorkspaceId $selectedWorkspace.Id
+
+            # # Sort refresh attempts to find the latest attempt
+            # $latestRefresh = $refreshHistory | Sort-Object -Property EndTime -Descending | Select-Object -First 1
+            
+            # if ($latestRefresh.Status -eq "Failed") {
+            #     Write-Host "Last Refresh Attempt: $($latestRefresh.EndTime)"
+            #     Write-Host "Failure Reason: $($latestRefresh.ErrorMessage)" -ForegroundColor Red
+            # }
+
+            $ctr++
+
+
+        } else {
+            # Uncomment to show refreshable datasets
+            # Write-Host "`nDataset '$($dataset.Name)' is **refreshable**.`n"
         }
     }
-    Write-Host "Finished checking datasets in workspace '$($selectedWorkspace.Name)'."
+    Write-Host "`nFinished checking refresh status for datasets in workspace '$($selectedWorkspace.Name)'."
+    
+    if ($ctr -eq 0) {
+        Write-Host "All datasets are refreshable!" -ForegroundColor Green
+    }
+    else {
+        Write-Host "`nThere are " -NoNewline
+        Write-Host "'$ctr' " -ForegroundColor Red -NoNewline
+        Write-Host "fails."
+    }
 }
