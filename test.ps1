@@ -1,0 +1,1 @@
+& "C:\Scripts\pbi-tools\pbi-tools.exe" powerbi list-reports --workspace-id me
