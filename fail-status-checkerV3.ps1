@@ -4,9 +4,60 @@ if (-not (Get-Module -ListAvailable -Name MicrosoftPowerBIMgmt)) {
 }
 Import-Module MicrosoftPowerBIMgmt
 
-# Login to Power BI
+# Ensure the Az module is installed and imported for service principal checks
+if (-not (Get-Module -ListAvailable -Name Az)) {
+    Install-Module -Name Az -Scope CurrentUser -Force
+}
+Import-Module Az
+
+# Service principal details for Power BI authentication (replace with your values)
+$applicationId = "your-application-id"  # Replace with your service principal's Application (Client) ID
+$tenantId = "your-tenant-id"           # Replace with your tenant ID
+
+# List of potential service principal application IDs used in dataset refreshes (replace with your values)
+$datasetServicePrincipals = @(
+    "your-service-principal-id-1",
+    "your-service-principal-id-2"
+)  # Add known service principal IDs used for dataset data sources
+
+# Check service principal credential expiration for dataset service principals
 try {
-    Connect-PowerBIServiceAccount -ErrorAction Stop
+    Connect-AzAccount -ServicePrincipal -ApplicationId $applicationId -TenantId $tenantId -Credential (Get-Credential) -ErrorAction Stop
+    $expiredPrincipals = @()
+    foreach ($spAppId in $datasetServicePrincipals) {
+        $sp = Get-AzADServicePrincipal -ApplicationId $spAppId -ErrorAction SilentlyContinue
+        if ($sp) {
+            $credentials = Get-AzADAppCredential -ObjectId $sp.Id -ErrorAction Stop
+            $currentDate = Get-Date
+            foreach ($cred in $credentials) {
+                if ($cred.EndDateTime -lt $currentDate) {
+                    Write-Host "Service principal $spAppId credential (KeyId: $($cred.KeyId)) expired on $($cred.EndDateTime)." -ForegroundColor Red
+                    $expiredPrincipals += $spAppId
+                }
+            }
+        } else {
+            Write-Host "Service principal $spAppId not found in Entra ID." -ForegroundColor Yellow
+        }
+    }
+    if ($expiredPrincipals.Count -gt 0) {
+        Write-Host "One or more service principal credentials are expired. Dataset refreshes may be affected." -ForegroundColor Red
+    } else {
+        Write-Host "All checked service principal credentials are valid." -ForegroundColor Green
+    }
+    if ($datasetServicePrincipals.Count -eq 0) {
+        Write-Host "No service principal IDs provided for dataset checks. OAuth2 usage will be flagged." -ForegroundColor Yellow
+    }
+}
+catch {
+    Write-Host "Failed to verify service principals: $_" -ForegroundColor Red
+    Write-Host "Proceeding with dataset checks, but service principal expiration status may be incomplete." -ForegroundColor Yellow
+}
+
+# Login to Power BI with service principal
+try {
+    $securePassword = Read-Host "Enter service principal secret" -AsSecureString
+    $credential = New-Object System.Management.Automation.PSCredential($applicationId, $securePassword)
+    Connect-PowerBIServiceAccount -ServicePrincipal -Credential $credential -TenantId $tenantId -ErrorAction Stop
 }
 catch {
     Write-Host "Failed to connect to Power BI: $_" -ForegroundColor Red
@@ -64,7 +115,20 @@ if ($datasets.Count -eq 0) {
         $isRefreshable = $dataset.IsRefreshable
 
         if ($isRefreshable) {
-            # For refreshable datasets, check refresh history for failures
+            # Check data sources for service principal usage
+            try {
+                $apiUrl = "https://api.powerbi.com/v1.0/myorg/groups/$($selectedWorkspace.Id)/datasets/$($dataset.Id)/datasources"
+                $dataSources = Invoke-PowerBIRestMethod -Url $apiUrl -Method Get -ErrorAction Stop | ConvertFrom-Json
+                $usesServicePrincipal = $dataSources.value | Where-Object { $_.credentialType -eq "OAuth2" }
+                if ($usesServicePrincipal) {
+                    Write-Host "Dataset '$($dataset.Name)' uses OAuth2 (potential service principal)." -ForegroundColor Cyan
+                }
+            }
+            catch {
+                Write-Host "Dataset '$($dataset.Name)' data sources retrieval failed: $_" -ForegroundColor Red
+            }
+
+            # Check refresh history for failures
             try {
                 $apiUrl = "https://api.powerbi.com/v1.0/myorg/groups/$($selectedWorkspace.Id)/datasets/$($dataset.Id)/refreshes"
                 $refreshHistory = Invoke-PowerBIRestMethod -Url $apiUrl -Method Get -ErrorAction Stop | ConvertFrom-Json
@@ -88,6 +152,9 @@ if ($datasets.Count -eq 0) {
                     Write-Host "$($latestRefresh.serviceExceptionJson)" -ForegroundColor Red
                     $ctr++
                     $failedDatasets += $dataset.Name  # Add to failed datasets list
+                    if ($usesServicePrincipal -and $expiredPrincipals.Count -gt 0) {
+                        Write-Host "Possible cause: Expired service principal credentials ($($expiredPrincipals -join ', '))." -ForegroundColor Red
+                    }
                 } else {
                     # Uncomment to show successful refreshes
                     # Write-Host "`nDataset '$($dataset.Name)' is refreshable and last refresh status: $($latestRefresh.status)."
