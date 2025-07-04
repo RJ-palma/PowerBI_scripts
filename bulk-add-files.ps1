@@ -6,18 +6,18 @@ if (-not (Test-Path $PbiTools)) {
     exit
 }
 
-# # Test PBI Tools version
-# Write-Host "Testing PBI Tools..."
-# & $PbiTools --version
+# Test PBI Tools version
+Write-Host "Testing PBI Tools..."
+& $PbiTools --version
 
-# # Authenticate with Power BI Service
-# Write-Host "Logging in to Power BI Service..."
-# try {
-#     & $PbiTools login powerbi
-# } catch {
-#     Write-Host "Login failed: ${_}"
-#     exit
-# }
+# Authenticate with Power BI Service
+Write-Host "Logging in to Power BI Service..."
+try {
+    & $PbiTools login powerbi
+} catch {
+    Write-Host "Login failed: ${_}"
+    exit
+}
 
 # Define workspace ID and output directory
 $workspaceId = "me"  # Replace with your workspace ID

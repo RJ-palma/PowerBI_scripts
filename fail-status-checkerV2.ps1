@@ -1,12 +1,50 @@
 # Ensure the MicrosoftPowerBIMgmt module is installed and imported
 if (-not (Get-Module -ListAvailable -Name MicrosoftPowerBIMgmt)) {
-    Install-Module -Name MicrosoftPowerBIMgmt -Scope CurrentUser -Force
+    Install-Module -Name MicrosoftPowerBIMgmt -Scope CurrentUser
 }
 Import-Module MicrosoftPowerBIMgmt
 
-# Login to Power BI
+# Ensure the Az module is installed and imported for service principal checks
+if (-not (Get-Module -ListAvailable -Name Az)) {
+    Install-Module -Name Az -Scope CurrentUser
+}
+Import-Module Az
+
+# Service principal details (replace with your values)
+$applicationId = "your-application-id"  # Replace with your service principal's Application (Client) ID
+$tenantId = "6c891bd8-96af-4ed3-93bb-155d620876ae"           # Replace with your tenant ID
+
+# Check service principal credential expiration
 try {
-    Connect-PowerBIServiceAccount -ErrorAction Stop
+    Connect-AzAccount -ServicePrincipal -ApplicationId $applicationId -TenantId $tenantId -Credential (Get-Credential) -ErrorAction Stop
+    $sp = Get-AzADServicePrincipal -ApplicationId $applicationId -ErrorAction Stop
+    $credentials = Get-AzADAppCredential -ObjectId $sp.Id -ErrorAction Stop
+    $currentDate = Get-Date
+
+    $expired = $false
+    foreach ($cred in $credentials) {
+        if ($cred.EndDateTime -lt $currentDate) {
+            Write-Host "Service principal credential (KeyId: $($cred.KeyId)) expired on $($cred.EndDateTime)." -ForegroundColor Red
+            $expired = $true
+        }
+    }
+    if ($expired) {
+        Write-Host "One or more service principal credentials are expired. Exiting." -ForegroundColor Red
+        exit
+    } else {
+        Write-Host "Service principal credentials are valid." -ForegroundColor Green
+    }
+}
+catch {
+    Write-Host "Failed to verify service principal: $_" -ForegroundColor Red
+    exit
+}
+
+# Login to Power BI with service principal
+try {
+    $securePassword = Read-Host "Enter service principal secret" -AsSecureString
+    $credential = New-Object System.Management.Automation.PSCredential($applicationId, $securePassword)
+    Connect-PowerBIServiceAccount -ServicePrincipal -Credential $credential -TenantId $tenantId -ErrorAction Stop
 }
 catch {
     Write-Host "Failed to connect to Power BI: $_" -ForegroundColor Red
@@ -109,7 +147,7 @@ if ($datasets.Count -eq 0) {
         Write-Host "All refreshable datasets have no recent failures!" -ForegroundColor Green
     } else {
         Write-Host "`nThere are " -NoNewline
-        Write-Host "'$ctr' " -ForegroundColor Red -NoNewline
+        WriteHost "'$ctr' " -ForegroundColor Red -NoNewline
         Write-Host "datasets with failed refreshes."
         Write-Host "Datasets with refresh failures:" -ForegroundColor Red
         foreach ($datasetName in $failedDatasets) {

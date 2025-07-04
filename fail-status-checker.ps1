@@ -29,91 +29,125 @@ for ($i = 0; $i -lt $workspaces.Count; $i++) {
 }
 
 # Prompt user for workspace selection
-$workspaceSelection = Read-Host "`nPlease enter the number of the workspace you want to check"
+Write-Host "`nPlease enter the numbers of the workspaces you want to check (comma-separated, e.g., 1,2,3) or type 'all' for all workspaces:"
+$workspaceSelection = Read-Host
 
-# Convert input to integer
-$workspaceSelection = [int]$workspaceSelection
-
-# Validate user input
-if ($workspaceSelection -lt 1 -or $workspaceSelection -gt $workspaces.Count) {
-    Write-Host "Invalid selection. Exiting." -ForegroundColor Red
-    exit
-}
-
-# Get the selected workspace
-$selectedWorkspace = $workspaces[$workspaceSelection - 1]
-
-# Get datasets in the selected workspace
-try {
-    $datasets = Get-PowerBIDataset -WorkspaceId $selectedWorkspace.Id -ErrorAction Stop
-}
-catch {
-    Write-Host "Failed to retrieve datasets: $_" -ForegroundColor Red
-    exit
-}
-
-$ctr = 0
-$failedDatasets = @()  # Initialize array to store names of datasets with refresh failures
-
-if ($datasets.Count -eq 0) {
-    Write-Host "No datasets found in workspace '$($selectedWorkspace.Name)'." -ForegroundColor Yellow
+# Handle workspace selection
+$selectedWorkspaces = @()
+if ($workspaceSelection.Trim().ToLower() -eq "all") {
+    $selectedWorkspaces = $workspaces
 } else {
-    Write-Host "`nChecking refresh status for datasets in workspace '$($selectedWorkspace.Name)':`n"
-    foreach ($dataset in $datasets) {
-        # Check if the dataset is refreshable
-        $isRefreshable = $dataset.IsRefreshable
-
-        if ($isRefreshable) {
-            # For refreshable datasets, check refresh history for failures
-            try {
-                $apiUrl = "https://api.powerbi.com/v1.0/myorg/groups/$($selectedWorkspace.Id)/datasets/$($dataset.Id)/refreshes"
-                $refreshHistory = Invoke-PowerBIRestMethod -Url $apiUrl -Method Get -ErrorAction Stop | ConvertFrom-Json
-            }
-            catch {
-                Write-Host "`nDataset '$($dataset.Name)' refresh history retrieval failed: $_" -ForegroundColor Red
-                $ctr++
-                $failedDatasets += $dataset.Name  # Add to failed datasets list
-                continue
-            }
-
-            # Check if refresh history exists
-            if ($refreshHistory.value -and $refreshHistory.value.Count -gt 0) {
-                $latestRefresh = $refreshHistory.value | Sort-Object -Property endTime -Descending | Select-Object -First 1
-                if ($latestRefresh.status -eq "Failed") {
-                    Write-Host "`nDataset '$($dataset.Name)'"
-                    Write-Host "is refreshable but " -NoNewline
-                    Write-Host "**failed its last refresh**." -ForegroundColor Red
-                    Write-Host "Last Refresh Attempt: $($latestRefresh.endTime)"
-                    Write-Host "Failure Reason:"
-                    Write-Host "$($latestRefresh.serviceExceptionJson)" -ForegroundColor Red
-                    $ctr++
-                    $failedDatasets += $dataset.Name  # Add to failed datasets list
-                } else {
-                    # Uncomment to show successful refreshes
-                    # Write-Host "`nDataset '$($dataset.Name)' is refreshable and last refresh status: $($latestRefresh.status)."
-                }
-            } else {
-                Write-Host "`nis refreshable but has no refresh history." -ForegroundColor Yellow
-                Write-Host "Dataset '$($dataset.Name)' `n"
-            }
+    $selections = $workspaceSelection -split "," | ForEach-Object { $_.Trim() } | Where-Object { $_ -match '^\d+$' }
+    foreach ($selection in $selections) {
+        $index = [int]$selection
+        if ($index -ge 1 -and $index -le $workspaces.Count) {
+            $selectedWorkspaces += $workspaces[$index - 1]
         } else {
-            # For unrefreshable datasets
-            Write-Host "`nis **unrefreshable** (e.g., DirectQuery or Live Connection)." -ForegroundColor Yellow
-            Write-Host "Dataset '$($dataset.Name)'`n"
-            # Note: Unrefreshable datasets typically don’t have refresh history, so skip checking
+            Write-Host "Invalid selection: $selection. Skipping." -ForegroundColor Red
         }
     }
-    Write-Host "`nFinished checking refresh status for datasets in workspace '$($selectedWorkspace.Name)'."
-    
-    if ($ctr -eq 0) {
-        Write-Host "All refreshable datasets have no recent failures!" -ForegroundColor Green
+}
+
+if ($selectedWorkspaces.Count -eq 0) {
+    Write-Host "No valid workspaces selected. Exiting." -ForegroundColor Red
+    exit
+}
+
+# Initialize array to store all failed datasets with workspace info
+$allFailedDatasets = @()
+
+# Process each selected workspace
+foreach ($workspace in $selectedWorkspaces) {
+    Write-Host "`n" + ("=" * 50)
+    Write-Host "Checking Workspace: $($workspace.Name)"
+    Write-Host ("=" * 50) + "`n"
+
+    # Get datasets in the selected workspace
+    try {
+        $datasets = Get-PowerBIDataset -WorkspaceId $workspace.Id -ErrorAction Stop
+    }
+    catch {
+        Write-Host "Failed to retrieve datasets for workspace '$($workspace.Name)': $_" -ForegroundColor Red
+        continue
+    }
+
+    if ($datasets.Count -eq 0) {
+        Write-Host "No datasets found in workspace '$($workspace.Name)'." -ForegroundColor Yellow
     } else {
-        Write-Host "`nThere are " -NoNewline
-        Write-Host "'$ctr' " -ForegroundColor Red -NoNewline
-        Write-Host "datasets with failed refreshes."
-        Write-Host "Datasets with refresh failures:" -ForegroundColor Red
-        foreach ($datasetName in $failedDatasets) {
-            Write-Host "- $datasetName" -ForegroundColor Red
+        Write-Host "Checking refresh status for datasets in workspace '$($workspace.Name)':`n"
+        foreach ($dataset in $datasets) {
+            # Check if the dataset is refreshable
+            $isRefreshable = $dataset.IsRefreshable
+
+            if ($isRefreshable) {
+                # For refreshable datasets, check refresh history for failures
+                try {
+                    $apiUrl = "https://api.powerbi.com/v1.0/myorg/groups/$($workspace.Id)/datasets/$($dataset.Id)/refreshes"
+                    $refreshHistory = Invoke-PowerBIRestMethod -Url $apiUrl -Method Get -ErrorAction Stop | ConvertFrom-Json
+                }
+                catch {
+                    Write-Host "Dataset '$($dataset.Name)' refresh history retrieval failed: $_" -ForegroundColor Red
+                    $allFailedDatasets += [PSCustomObject]@{
+                        WorkspaceName = $workspace.Name
+                        DatasetName   = $dataset.Name
+                        FailureReason = "Refresh history retrieval failed: $_"
+                    }
+                    continue
+                }
+
+                # Check if refresh history exists
+                if ($refreshHistory.value -and $refreshHistory.value.Count -gt 0) {
+                    $latestRefresh = $refreshHistory.value | Sort-Object -Property endTime -Descending | Select-Object -First 1
+                    if ($latestRefresh.status -eq "Failed") {
+                        Write-Host "Dataset '$($dataset.Name)'"
+                        Write-Host "is refreshable but " -NoNewline
+                        Write-Host "**failed its last refresh**." -ForegroundColor Red
+                        Write-Host "Last Refresh Attempt: $($latestRefresh.endTime)"
+                        Write-Host "Failure Reason:"
+                        Write-Host "$($latestRefresh.serviceExceptionJson)" -ForegroundColor Red
+                        $allFailedDatasets += [PSCustomObject]@{
+                            WorkspaceName = $workspace.Name
+                            DatasetName   = $dataset.Name
+                            FailureReason = $latestRefresh.serviceExceptionJson
+                        }
+                    } else {
+                        # Uncomment to show successful refreshes
+                        # Write-Host "Dataset '$($dataset.Name)' is refreshable and last refresh status: $($latestRefresh.status)."
+                    }
+                } else {
+                    Write-Host "Dataset '$($dataset.Name)' is refreshable but has no refresh history." -ForegroundColor Yellow
+                }
+            } else {
+                # For unrefreshable datasets
+                Write-Host "Dataset '$($dataset.Name)' is **unrefreshable** (e.g., DirectQuery or Live Connection)." -ForegroundColor Yellow
+            }
+            Write-Host ""  # Add blank line for readability
         }
+        Write-Host "Finished checking refresh status for datasets in workspace '$($workspace.Name)'."
+    }
+}
+
+# Display summary of all failed datasets, grouped by workspace
+Write-Host "`n" + ("=" * 50)
+Write-Host "Summary of Datasets with Failed Refreshes"
+Write-Host ("=" * 50) + "`n"
+
+if ($allFailedDatasets.Count -eq 0) {
+    Write-Host "All refreshable datasets across all selected workspaces have no recent failures!" -ForegroundColor Green
+} else {
+    Write-Host "There are " -NoNewline
+    Write-Host "'$($allFailedDatasets.Count)' " -ForegroundColor Red -NoNewline
+    Write-Host "datasets with failed refreshes across all selected workspaces."
+    Write-Host "Datasets with refresh failures, grouped by workspace:" -ForegroundColor Red
+
+    # Group failed datasets by workspace
+    $groupedFailures = $allFailedDatasets | Group-Object -Property WorkspaceName
+    foreach ($group in $groupedFailures | Sort-Object -Property Name) {
+        Write-Host "`nWorkspace: '$($group.Name)'" -ForegroundColor White
+        foreach ($failed in $group.Group) {
+            Write-Host "- Dataset: '$($failed.DatasetName)'" -ForegroundColor Red
+            Write-Host "  Failure Reason: $($failed.FailureReason)" -ForegroundColor Red
+        }
+        Write-Host ""  # Add blank line for readability
     }
 }

@@ -4,30 +4,40 @@ if (-not (Get-Module -ListAvailable -Name MicrosoftPowerBIMgmt)) {
 }
 Import-Module MicrosoftPowerBIMgmt
 
-# Ensure the Az module is installed and imported for service principal checks
+# Ensure the Az module is installed and imported for service principal checks and Tenant ID retrieval
 if (-not (Get-Module -ListAvailable -Name Az)) {
     Install-Module -Name Az -Scope CurrentUser -Force
 }
 Import-Module Az
 
-# Service principal details for Power BI authentication (replace with your values)
-$applicationId = "your-application-id"  # Replace with your service principal's Application (Client) ID
-$tenantId = "your-tenant-id"           # Replace with your tenant ID
+# # Service principal details for Power BI authentication (replace with your values)
+# $applicationId = "your-application-id"  # Replace with your service principal's Application (Client) ID
 
-# List of potential service principal application IDs used in dataset refreshes (replace with your values)
-$datasetServicePrincipals = @(
-    "your-service-principal-id-1",
-    "your-service-principal-id-2"
-)  # Add known service principal IDs used for dataset data sources
+# # List of potential service principal application IDs used in dataset refreshes (replace with your values)
+# $datasetServicePrincipals = @(
+#     "your-service-principal-id-1",
+#     "your-service-principal-id-2"
+# )  # Add known service principal IDs used for dataset data sources
+
+# Authenticate to Azure to retrieve Tenant ID and check service principals
+try {
+    $credential = Get-Credential -Message "Enter service principal credentials (Username: Application ID, Password: Client Secret)"
+    Connect-AzAccount -ServicePrincipal -Credential $credential -ErrorAction Stop
+    $tenantId = (Get-AzContext).Tenant.Id
+    Write-Host "Retrieved Tenant ID: $tenantId" -ForegroundColor Green
+}
+catch {
+    Write-Host "Failed to authenticate to Azure or retrieve Tenant ID: $_" -ForegroundColor Red
+    exit
+}
 
 # Check service principal credential expiration for dataset service principals
 try {
-    Connect-AzAccount -ServicePrincipal -ApplicationId $applicationId -TenantId $tenantId -Credential (Get-Credential) -ErrorAction Stop
     $expiredPrincipals = @()
     foreach ($spAppId in $datasetServicePrincipals) {
         $sp = Get-AzADServicePrincipal -ApplicationId $spAppId -ErrorAction SilentlyContinue
         if ($sp) {
-            $credentials = Get-AzADAppCredential -ObjectId $sp.Id -ErrorAction Stop
+            $credentials = Get-AzADAppCredential -ObjectId $sp.BundleId -ErrorAction Stop
             $currentDate = Get-Date
             foreach ($cred in $credentials) {
                 if ($cred.EndDateTime -lt $currentDate) {
@@ -55,8 +65,6 @@ catch {
 
 # Login to Power BI with service principal
 try {
-    $securePassword = Read-Host "Enter service principal secret" -AsSecureString
-    $credential = New-Object System.Management.Automation.PSCredential($applicationId, $securePassword)
     Connect-PowerBIServiceAccount -ServicePrincipal -Credential $credential -TenantId $tenantId -ErrorAction Stop
 }
 catch {
