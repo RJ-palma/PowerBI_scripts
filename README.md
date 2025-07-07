@@ -33,4 +33,4 @@ This script checks the status of various processes. It helps in identifying any 
 - Make sure you have the necessary permissions to execute these scripts.
 - Open PowerShell and run the script using the following command:
   ```powershell
-  .\script-name.ps1
+  .\<folder_name>\<script-name>.ps1
