@@ -115,11 +115,13 @@ foreach ($workspace in $selectedWorkspaces) {
                         # Write-Host "Dataset '$($dataset.Name)' is refreshable and last refresh status: $($latestRefresh.status)."
                     }
                 } else {
-                    Write-Host "Dataset '$($dataset.Name)' is refreshable but has no refresh history." -ForegroundColor Yellow
+                    Write-Host "Dataset '$($dataset.Name)' "
+                    Write-Host "is refreshable but has no refresh history." -ForegroundColor Yellow
                 }
             } else {
                 # For unrefreshable datasets
-                Write-Host "Dataset '$($dataset.Name)' is **unrefreshable** (e.g., DirectQuery or Live Connection)." -ForegroundColor Yellow
+                Write-Host "Dataset '$($dataset.Name)' "
+                Write-Host "is **unrefreshable** (e.g., DirectQuery or Live Connection)." -ForegroundColor Yellow
             }
             Write-Host ""  # Add blank line for readability
         }
