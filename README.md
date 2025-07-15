@@ -15,7 +15,7 @@ This script is used to clone a specified workspace/s. It allows for configuratio
 
 ## Deleting
 ### `bulk-delete-files.ps1`
-This script enables bulk deletion of Power BI reports. It can delete multiple files based on specified patterns or criteria.
+This script enables bulk deletion of Power BI reports. It can delete multiple files or entire workspaces depending on selection.
 
 ## Downloading
 ### `bulk-add-filesV3.ps1`
